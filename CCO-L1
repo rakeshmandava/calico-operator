@@ -1,0 +1,112 @@
+Kubernetes Networking Introduction
+
+	- K8s has a Clearly defined Networking model - set of behaviors users can expect across any cluster, any environment with any network implementation.
+	- At the core of the model are 4 principles.
+	
+	ü Every POD gets it's own IP address.
+	ü Containers within a POD share that IP address and can communicate freely with each other.
+	ü PODs can communicate with other PODs in cluster using their IP addresses without NAT, meaning IP addresses are preserved across POD network.
+	ü Network Isolation i.e., restricting what each POD can communicate, is defined using 'Network Policy'. As a result, PODs can be treated much like VMs or hosts, in that, they all have unique IP addresses. The containers within POD are like Processes running on vm/host, they share same IP address.
+
+
+	- K8s has limited built-in Network support called Kubelet, which provides basic network connectivity.
+	- CNI (Container Network Interface) API lets 3rd party network implementations plug in to k8s.
+	- CNI config files are used to determine which CNI plugin to run. Different CNI Plugins can be chained together. 
+	For example, Network connectivity and IPAM plugins. 
+
+	K8s services provide a way of abstracting access to a "group of pods"  as a network service. The 'group of pods' backing each service is usually defined using a label selector. When a client connects to a k8s service, the connection is intercepted and is load balanced to one of the pods backing the service. K8s services can be thought of as virtual load balancer built into pod network.
+	
+	- There are 3 main types of k8s services.
+	
+	ü Cluster IP Services. 
+	    - Usual way of accessing services from inside the cluster.
+	    - Cluster IP is a virtual IP address used to represent the service.
+	    - POD finds the cluster IP using DNS. POD then tries to connect to cluster IP, kube-proxy intercepts the connection and load balances it to one of the  backing PODs.
+	
+	ü Node Port Services.
+	    - Basic way of accessing a service from outside the cluster.
+	    - Node port, is a port reserved on each node in cluster through which the service can be accessed.
+	    - Client outside the cluster, can connect to node port on any node in the cluster, kube-proxy will intercept the connection and load balance it to a backing POD. 
+	
+	ü Load Balancer Services.
+	    - Sophisticated way to access service from outside the cluster.
+	 
+	K8s DNS
+	- K8s provides a built-in DNS service. Implemented as k8s service, that maps to one or more DNS server pods, usually running coreDNS.
+	- Every POD and every service is discoverable through the k8s DNS service. For example, querying a 'service name' returns the service's cluster IP.
+	- The PODs in the cluster are configured with a DNS search list that includes the PODs own namespace, and cluster's default domain. For example, if a POD is in the same namespace as a service, it can just use the service's name without needing to know which namespace or cluster its running in.
+
+	Outgoing NAT
+	- K8s network model specifies that pods must be able to communicate with each other directly using their IP addresses, without any NAT.
+	- K8s network model does not mandate that the pod IP addresses are routable beyond the boundaries of the cluster.
+	- If the pod network is overlay, and pod tries to connect to something outside the cluster, the connection is intercepted, NAT is used to map the pod's source IP to node's IP. The packet can then traverse the rest of the external network to wherever the destination is. The return packets on connection get mapped back automatically, from node IP address back to pod's ip address. The pod and external server are unaware any of this happened.
+
+	Network Policy
+	- Network policy is primary tool for securing a kubernetes network. It allows you to easily restrict the network traffic in your cluster, so only the traffic you want to flow is allowed.
+	- Network policies are abstracted from the network, by using label selectors as their primary mechanism for identifying workloads rather than IP addresses, or ip address ranges.
+	- Kubernetes defines a standard network policy API, so there's a base set of features you can expect on any cluster. But it doesn’t do anything with network policy other than to store it. It’s the network plugins that are responsible for actually enforcing the policy. 
+
+          Calico Network Policy
+	Calico supports two different types of network policy.
+	ü A namespaced Network Policy
+	ü A non namespaced Global Network Policy. (applies across the cluster)
+
+	- The policies use label selectors to define which pods the policies apply to.
+	- The policies contain a series of ingress or egress rules or both.
+	- Unlike default k8s policy, where the action is implicitly allow, calico allows you to explicitly specify allow or deny actions.
+	- Calico also allows to specify precedence order for the policy. If multiple policies apply to same pod, and the policies contradict with each other in terms of allowing or denying certain traffic, this order field acts as tie breaker.
+	- Calico network policies also support richer match criteria such as calico network sets and host endpoints.
+	- K8s network policies and calico network policies can be used along side each other, for example: Dev team might use k8s network policies to define per micrsoservice policy rules, security team can use calico network policies to define cluster's overall security posture.
+	- Network Policy can be thought of as providing a firewall in front of every pod in cluster.
+	- Calico can take it a step further and use network policy to help secure the nodes themselves. This is equivalent to putting a firewall on every one of the nodes network interfaces. These network interfaces are referred to as 'host endpoints' in calico.
+	- The network interfaces or host endpoints can be labelled just like pods and network policies can be applied to them based on their labels.
+	- Calico can also enforce network policy within an Istio service mesh. This includes matching on application layer attributes , such as http methods and paths. It uses the cryptographic identity associated with each part in service mesh as additional authentication for traffic.
+	- Enforcing policy at service mesh layer and the pod network layer provides defense in depth as part of zero trust network security model.
+	
+	Ingress and Egress
+	- Network policy is inherently flexible. The following are some of the best practices.
+	ü Always specify both ingress and egress rules in network policies and make sure every pod is covered by network policy even when its not directly accessible from outside cluster.
+	ü Consider standardizing the way pods are labelled so they are easy to follow and understand using consistent scheme or design pattern.
+	ü Default Deny - Use a global network policy to implement default deny on both egress and ingress directions. Since global policy applies to control plane nodes and pods as well, its better to instead limit policy to only apply to pods and exclude k8s and calico control plane nodes.
+	
+	POD Connectivity
+	ü Each node has it's own IP address and is connected to underlying network over a network interface.
+	ü The pods also have IP addresses, each pod has its own networking environment isolated from host using Linux network namespaces.
+	ü The pods are connected to hosts/nodes using pair of virtual ethernet interfaces often referred to as veth pair.
+	ü The pods see etho0 (host/node interface) as their interface and host has algorithmically generated interface for each pod that starts with 'cali'
+	ü Calico sets up host networking namespace to act as virtual router. The local pods are connected to virtual router and calico makes sure virtual router knows where all pods are across rest of cluster.  
+	ü All traffic forwarding happens natively within Linux kernel through code paths that are highly optimized.
+	ü Traffic between pods on same node is routed locally and traffic between pods on different nodes is routed over underlying network.
+	ü There are Some environments where underlying network does not know how to forward pod traffic. In these cases we need to run overlay network.
+	ü Calico supports both VXLAN and IPIP overlays, implemented as virtual interfaces within Linux kernel.
+	
+	WireGuard - Encrypting data in transit
+	- WireGuard is another kind of overlay network option but with added benefit of encryption.
+	- Calico uses a virtual interface for wireguard traffic. 
+	- Calico automates all of configuration and provisioning of wireguard.
+
+	BGP
+	- Using BGP calico can share routes of pods to other BGP capable routers.
+	- Pods become first class citizen in network and overlay network can be avoided using BGP.
+	- Ips can be blocked using route aggregation to avoid load on routers.
+
+	Kubernetes Services
+	- K8s services provide a way of abstracting access to a group of pods as network service. When client connects to k8s service, the connection is load balanced to one of pods backing the service.
+	- Let's take a deeper look at how this is implemented, in terms of underlying network, for the three main services: Cluster IPs, Node Ports and Load Balancers.
+	
+	ü Cluster IPs: when a pod tries to connect to cluster ip, the connection is intercepted by rules kube-proxy has programmed into kernel. These rules select random backing pod to load balance to, changing destination IP to be IP of chosen backing pod, using DNAT. The Linux kernel tracks the state of these connections and automatically reverses the DNAT for any return packets.
+	ü Node Port: In case of node ports, in addition of destination IP address being changed, the source IP address is changed from client's pod IP to the node's IP. If kube-proxy didn’t do this, then return packets leaving backing pod node would go directly to client, without giving the node that did the NAT a chance to reverse the NAT. As a result, the client would drop the traffic because it would not recognize  it as being part of connection it made to node port. (Could be because of unrecognized source Ips in traffic it receives). The exception to this behavior, is if the service is configured with "externalTrafficPolicy:local", in which case kube-proxy only load balances to backing pods on same node, in which case, can just do DNAT, preserving the client's source IP address. This is great from improving understandability of application logs, and makes securing services that are exposed externally with network policy a lot simpler.
+	ü Load Balancer: load balancer is typically located at point in network where return traffic is guaranteed to be routed via it. So only DNAT needs to be done. It load balances the traffic across the nodes, using corresponding node port of the service. Kube-proxy then follows same processes as it did for standard node port, NATing both source and destination IP addresses. The return packets then follow same path to client. Some load balancers also support "externalTrafficPolicy:local". In this case, they will only load balance to nodes hosting a backing node, and kube-proxy will only load balance to backing pods on same node, preserving client's original source IP address all the way to backing pod.
+	
+	Kube-proxy
+	- Kube-proxy programs load balancing rules into the kernel.
+	- By default, kube-proxy uses Linux iptables for these rules, but it can also be configured to use Linux IPVS, which has performance benefits compared to iptables mode if we have very high number of services. Alternatively we can also opt to run calico's eBPF data plane which has built in native service handling so we don’t need to run kube-proxy at all. This outperforms kube-proxy in either mode.
+	
+	Calico Native Service Handling
+	- The native service handling preserves source IP and thus simplifies network policy.
+	- Also offers DSR (direct server return) which reduces number of network hops for return traffic thus improving performance.
+	- When an incoming connection is received from external client, Calico's native service handling is able to load balance the connection, forwarding packets to another node if required, without any NAT. The receiving node then performs DNAT, to map packets to chosen backing pod. Reverse packets get DNAT reversed and then if DSR is enabled, return directly to client.
+	
+	Advertising Service
+	- One alternative to using node ports, or load balancers, is to advertise service IP addresses over BGP. This requires the cluster to be running on an underlying network that supports BGP. This makes whole of your network service-aware and uses networks routers to do load balancing.
+When used in conjunction with calico eBPF native service handling, this provides even load balancing that's independent of topology of network, and preserves client source IP addresses all the way to backing Pod.
